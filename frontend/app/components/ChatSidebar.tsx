@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { ChatSession } from "../lib/storage";
 
 interface ChatSidebarProps {
@@ -12,6 +13,13 @@ interface ChatSidebarProps {
   onClose: () => void;
 }
 
+interface GroupedSessions {
+  [key: string]: ChatSession[];
+}
+
+// Define the order of date groups
+const GROUP_ORDER = ["Today", "Yesterday", "Previous 7 Days", "Previous 30 Days"];
+
 export default function ChatSidebar({
   sessions,
   activeSessionId,
@@ -21,16 +29,55 @@ export default function ChatSidebar({
   isOpen,
   onClose,
 }: ChatSidebarProps) {
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
+  // Group sessions by date
+  const groupedSessions = useMemo(() => {
+    const groups: GroupedSessions = {};
 
-    if (diffDays === 0) return "Today";
-    if (diffDays === 1) return "Yesterday";
-    if (diffDays < 7) return `${diffDays} days ago`;
-    return date.toLocaleDateString();
-  };
+    sessions.forEach((session) => {
+      const date = new Date(session.updatedAt);
+      const now = new Date();
+      const diffDays = Math.floor((now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
+
+      let groupKey: string;
+      if (diffDays === 0) {
+        groupKey = "Today";
+      } else if (diffDays === 1) {
+        groupKey = "Yesterday";
+      } else if (diffDays < 7) {
+        groupKey = "Previous 7 Days";
+      } else if (diffDays < 30) {
+        groupKey = "Previous 30 Days";
+      } else {
+        groupKey = date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+      }
+
+      if (!groups[groupKey]) {
+        groups[groupKey] = [];
+      }
+      groups[groupKey].push(session);
+    });
+
+    return groups;
+  }, [sessions]);
+
+  // Get ordered group keys
+  const orderedGroups = useMemo(() => {
+    const keys = Object.keys(groupedSessions);
+    return keys.sort((a, b) => {
+      const aIndex = GROUP_ORDER.indexOf(a);
+      const bIndex = GROUP_ORDER.indexOf(b);
+
+      // If both are in the predefined order, sort by that order
+      if (aIndex !== -1 && bIndex !== -1) {
+        return aIndex - bIndex;
+      }
+      // If only one is in predefined order, it comes first
+      if (aIndex !== -1) return -1;
+      if (bIndex !== -1) return 1;
+      // Otherwise, sort by date (newer months first)
+      return 0; // Keep original order for month-year groups (already sorted by session date)
+    });
+  }, [groupedSessions]);
 
   return (
     <>
@@ -84,44 +131,50 @@ export default function ChatSidebar({
               No conversations yet
             </p>
           ) : (
-            <ul className="px-2 pb-4">
-              {sessions.map((session) => (
-                <li key={session.id} className="mb-1">
-                  <button
-                    onClick={() => {
-                      onSelectSession(session.id);
-                      onClose();
-                    }}
-                    className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors group flex items-start justify-between gap-2 ${
-                      activeSessionId === session.id
-                        ? "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
-                        : "hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
-                    }`}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">
-                        {session.title}
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                        {formatDate(session.updatedAt)}
-                      </p>
-                    </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDeleteSession(session.id);
-                      }}
-                      className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-gray-400 hover:text-red-500 transition-all"
-                      aria-label="Delete conversation"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-                        <path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.519.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 7.5a.75.75 0 1 0 1.5-.06l-.3-7.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 7.5a.75.75 0 1 0 1.5.06l.3-7.5Z" clipRule="evenodd" />
-                      </svg>
-                    </button>
-                  </button>
-                </li>
+            <div className="px-2 pb-4">
+              {orderedGroups.map((groupName) => (
+                <div key={groupName} className="mb-4">
+                  {/* Date Group Header */}
+                  <h3 className="px-3 py-2 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    {groupName}
+                  </h3>
+                  {/* Sessions in this group */}
+                  <ul>
+                    {groupedSessions[groupName].map((session) => (
+                      <li key={session.id} className="mb-1">
+                        <button
+                          onClick={() => {
+                            onSelectSession(session.id);
+                            onClose();
+                          }}
+                          className={`w-full text-left px-3 py-2.5 rounded-lg transition-colors group flex items-start justify-between gap-2 ${
+                            activeSessionId === session.id
+                              ? "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+                              : "hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                          }`}
+                        >
+                          <p className="text-sm font-medium truncate flex-1 min-w-0">
+                            {session.title}
+                          </p>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteSession(session.id);
+                            }}
+                            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-100 dark:hover:bg-red-900/30 rounded text-gray-400 hover:text-red-500 transition-all flex-shrink-0"
+                            aria-label="Delete conversation"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                              <path fillRule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.519.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 7.5a.75.75 0 1 0 1.5-.06l-.3-7.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 7.5a.75.75 0 1 0 1.5.06l.3-7.5Z" clipRule="evenodd" />
+                            </svg>
+                          </button>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
         </div>
       </aside>
