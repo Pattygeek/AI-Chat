@@ -262,6 +262,114 @@ export default function Home() {
     }
   }, [activeSession]);
 
+  const handleRegenerate = useCallback(async () => {
+    if (!activeSession || activeSession.messages.length === 0 || isLoading) return;
+
+    // Remove the last assistant message(s)
+    const msgs = [...activeSession.messages];
+    while (msgs.length > 0 && msgs[msgs.length - 1].role === "assistant") {
+      msgs.pop();
+    }
+
+    if (msgs.length === 0) return;
+
+    // Update session without the last assistant message
+    const session = { ...activeSession, messages: msgs, updatedAt: new Date().toISOString() };
+    updateSession(session);
+
+    setIsLoading(true);
+    setStreamingContent("");
+    abortControllerRef.current = new AbortController();
+
+    try {
+      const apiMessages = session.messages.map((msg) => {
+        const apiMsg: {
+          role: string;
+          content: string;
+          attachments?: { type: string; data: string; name: string }[];
+        } = { role: msg.role, content: msg.content };
+
+        if (msg.attachments && msg.attachments.length > 0) {
+          apiMsg.attachments = [];
+          for (const att of msg.attachments) {
+            if (att.type === "pdf" && att.pageImages) {
+              att.pageImages.forEach((pageImage, index) => {
+                apiMsg.attachments!.push({ type: "image", data: pageImage, name: `${att.name} (page ${index + 1})` });
+              });
+            } else {
+              apiMsg.attachments!.push({ type: att.type === "pdf" ? "image" : att.type, data: att.preview || "", name: att.name });
+            }
+          }
+        }
+        return apiMsg;
+      });
+
+      const response = await fetch(`${API_URL}/api/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: apiMessages }),
+        signal: abortControllerRef.current.signal,
+      });
+
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let accumulatedContent = "";
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split("\n");
+
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.type === "content") {
+                  accumulatedContent += data.content;
+                  setStreamingContent(accumulatedContent);
+                } else if (data.type === "done") {
+                  const aiMessage: Message = {
+                    id: generateId(),
+                    role: "assistant",
+                    content: accumulatedContent,
+                    timestamp: new Date(),
+                  };
+                  session.messages = [...session.messages, aiMessage];
+                  updateSession(session);
+                  setStreamingContent("");
+                } else if (data.type === "error") {
+                  throw new Error(data.error);
+                }
+              } catch {
+                // Skip invalid JSON lines
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      if ((error as Error).name === "AbortError") return;
+      console.error("Regenerate error:", error);
+      const errorMessage: Message = {
+        id: generateId(),
+        role: "assistant",
+        content: `Sorry, there was an error: ${(error as Error).message}. Please make sure the backend server is running.`,
+        timestamp: new Date(),
+      };
+      session.messages = [...session.messages, errorMessage];
+      updateSession(session);
+      setStreamingContent("");
+    } finally {
+      setIsLoading(false);
+      abortControllerRef.current = null;
+    }
+  }, [activeSession, isLoading, updateSession]);
+
   const messages = activeSession?.messages || [];
 
   return (
@@ -362,9 +470,18 @@ export default function Home() {
               </div>
             ) : (
               <>
-                {messages.map((message) => (
-                  <ChatMessage key={message.id} message={message} />
-                ))}
+                {messages.map((message, index) => {
+                  const lastAssistantIndex = messages.findLastIndex(m => m.role === "assistant");
+                  return (
+                    <ChatMessage
+                      key={message.id}
+                      message={message}
+                      isLastAssistant={message.role === "assistant" && index === lastAssistantIndex}
+                      onRegenerate={handleRegenerate}
+                      isLoading={isLoading}
+                    />
+                  );
+                })}
                 {streamingContent && (
                   <ChatMessage
                     message={{

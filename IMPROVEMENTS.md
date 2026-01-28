@@ -4,10 +4,10 @@ A roadmap of features and improvements for the AI Chat application.
 
 ## Core Functionality
 
-- [ ] **Conversation history/persistence** - Save chats to localStorage or a database so users can resume conversations
-- [ ] **Multiple chat sessions** - Sidebar to manage and switch between different conversations
+- [ ] **Conversation history/persistence** - Save chats to localStorage or a database so users can resume conversations ✅
+- [ ] **Multiple chat sessions** - Sidebar to manage and switch between different conversations ✅
 - [ ] **Model selection** - Let users choose between GPT-4o, GPT-4o-mini, etc.
-- [ ] **Regenerate response** - Button to regenerate the last AI response
+- [ ] **Regenerate response** - Button to regenerate the last AI response ✅
 - [ ] **Edit messages** - Allow users to edit their previous messages and regenerate from that point
 - [ ] **Copy message** - Button to copy AI responses to clipboard ✅
 - [ ] **Stop generation** - Button to stop streaming mid-response (abort controller is already in place)
