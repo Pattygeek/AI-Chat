@@ -3,6 +3,18 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import ChatMessage, { Message, MessageAttachment } from "./components/ChatMessage";
 import ChatInput, { Attachment } from "./components/ChatInput";
+import ChatSidebar from "./components/ChatSidebar";
+import {
+  ChatSession,
+  loadSessions,
+  saveSession,
+  deleteSession,
+  getSession,
+  createNewSession,
+  getActiveSessionId,
+  setActiveSessionId,
+  generateTitle,
+} from "./lib/storage";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
@@ -10,11 +22,32 @@ let messageIdCounter = 0;
 const generateId = () => `msg-${++messageIdCounter}-${Math.random().toString(36).slice(2, 11)}`;
 
 export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Load sessions on mount
+  useEffect(() => {
+    const savedSessions = loadSessions();
+    setSessions(savedSessions);
+
+    const activeId = getActiveSessionId();
+    if (activeId) {
+      const session = getSession(activeId);
+      if (session) {
+        // Convert timestamp strings back to Date objects
+        session.messages = session.messages.map(msg => ({
+          ...msg,
+          timestamp: new Date(msg.timestamp),
+        }));
+        setActiveSession(session);
+      }
+    }
+  }, []);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -22,9 +55,24 @@ export default function Home() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, streamingContent, scrollToBottom]);
+  }, [activeSession?.messages, streamingContent, scrollToBottom]);
+
+  // Save session whenever messages change
+  const updateSession = useCallback((session: ChatSession) => {
+    session.updatedAt = new Date().toISOString();
+    saveSession(session);
+    setSessions(loadSessions());
+    setActiveSession(session);
+    setActiveSessionId(session.id);
+  }, []);
 
   const handleSendMessage = useCallback(async (content: string, attachments: Attachment[] = []) => {
+    // Create session if none exists
+    let session = activeSession;
+    if (!session) {
+      session = createNewSession();
+    }
+
     // Convert attachments to message attachments format
     const messageAttachments: MessageAttachment[] = attachments.map(att => ({
       id: att.id,
@@ -42,8 +90,14 @@ export default function Home() {
       attachments: messageAttachments.length > 0 ? messageAttachments : undefined,
     };
 
-    const updatedMessages = [...messages, userMessage];
-    setMessages(updatedMessages);
+    // Auto-generate title from first message
+    if (session.messages.length === 0) {
+      session.title = generateTitle(content);
+    }
+
+    session.messages = [...session.messages, userMessage];
+    updateSession(session);
+
     setIsLoading(true);
     setStreamingContent("");
 
@@ -52,7 +106,7 @@ export default function Home() {
 
     try {
       // Prepare messages for API, including attachments
-      const apiMessages = updatedMessages.map((msg) => {
+      const apiMessages = session.messages.map((msg) => {
         const apiMsg: {
           role: string;
           content: string;
@@ -130,7 +184,8 @@ export default function Home() {
                     content: accumulatedContent,
                     timestamp: new Date(),
                   };
-                  setMessages((prev) => [...prev, aiMessage]);
+                  session.messages = [...session.messages, aiMessage];
+                  updateSession(session);
                   setStreamingContent("");
                 } else if (data.type === "error") {
                   throw new Error(data.error);
@@ -155,141 +210,200 @@ export default function Home() {
         content: `Sorry, there was an error: ${(error as Error).message}. Please make sure the backend server is running.`,
         timestamp: new Date(),
       };
-      setMessages((prev) => [...prev, errorMessage]);
+      session.messages = [...session.messages, errorMessage];
+      updateSession(session);
       setStreamingContent("");
     } finally {
       setIsLoading(false);
       abortControllerRef.current = null;
     }
-  }, [messages]);
+  }, [activeSession, updateSession]);
 
   const handleNewChat = useCallback(() => {
     // Cancel any ongoing request
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
-    setMessages([]);
+    const newSession = createNewSession();
+    saveSession(newSession);
+    setActiveSessionId(newSession.id);
+    setActiveSession(newSession);
+    setSessions(loadSessions());
     setStreamingContent("");
     setIsLoading(false);
   }, []);
 
-  return (
-    <div className="flex flex-col h-screen bg-white dark:bg-gray-900">
-      {/* Header */}
-      <header className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 24 24"
-                fill="white"
-                className="w-6 h-6"
-              >
-                <path d="M4.913 2.658c2.075-.27 4.19-.408 6.337-.408 2.147 0 4.262.139 6.337.408 1.922.25 3.291 1.861 3.405 3.727a4.403 4.403 0 0 0-1.032-.211 50.89 50.89 0 0 0-8.42 0c-2.358.196-4.04 2.19-4.04 4.434v4.286a4.47 4.47 0 0 0 2.433 3.984L7.28 21.53A.75.75 0 0 1 6 21v-4.03a48.527 48.527 0 0 1-1.087-.128C2.905 16.58 1.5 14.833 1.5 12.862V6.638c0-1.97 1.405-3.718 3.413-3.979Z" />
-                <path d="M15.75 7.5c-1.376 0-2.739.057-4.086.169C10.124 7.797 9 9.103 9 10.609v4.285c0 1.507 1.128 2.814 2.67 2.94 1.243.102 2.5.157 3.768.165l2.782 2.781a.75.75 0 0 0 1.28-.53v-2.39l.33-.026c1.542-.125 2.67-1.433 2.67-2.94v-4.286c0-1.505-1.125-2.811-2.664-2.94A49.392 49.392 0 0 0 15.75 7.5Z" />
-              </svg>
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
-                AI Chat
-              </h1>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                Powered by GPT-4o
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={handleNewChat}
-            className="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-          >
-            New Chat
-          </button>
-        </div>
-      </header>
+  const handleSelectSession = useCallback((id: string) => {
+    // Cancel any ongoing request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const session = getSession(id);
+    if (session) {
+      // Convert timestamp strings back to Date objects
+      session.messages = session.messages.map(msg => ({
+        ...msg,
+        timestamp: new Date(msg.timestamp),
+      }));
+      setActiveSession(session);
+      setActiveSessionId(id);
+    }
+    setStreamingContent("");
+    setIsLoading(false);
+  }, []);
 
-      {/* Messages Area */}
-      <main className="flex-1 overflow-y-auto">
-        <div className="max-w-4xl mx-auto px-4 py-6">
-          {messages.length === 0 && !streamingContent ? (
-            <div className="flex flex-col items-center justify-center h-full min-h-[60vh] text-center">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center mb-6">
+  const handleDeleteSession = useCallback((id: string) => {
+    deleteSession(id);
+    setSessions(loadSessions());
+
+    // If deleting active session, clear it
+    if (activeSession?.id === id) {
+      setActiveSession(null);
+    }
+  }, [activeSession]);
+
+  const messages = activeSession?.messages || [];
+
+  return (
+    <div className="flex h-screen bg-white dark:bg-gray-900">
+      {/* Sidebar */}
+      <ChatSidebar
+        sessions={sessions}
+        activeSessionId={activeSession?.id || null}
+        onSelectSession={handleSelectSession}
+        onNewChat={handleNewChat}
+        onDeleteSession={handleDeleteSession}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Header */}
+        <header className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
+          <div className="px-4 py-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {/* Mobile menu button */}
+              <button
+                onClick={() => setSidebarOpen(true)}
+                className="md:hidden p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5">
+                  <path fillRule="evenodd" d="M2 4.75A.75.75 0 0 1 2.75 4h14.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 4.75ZM2 10a.75.75 0 0 1 .75-.75h14.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 10Zm0 5.25a.75.75 0 0 1 .75-.75h14.5a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1-.75-.75Z" clipRule="evenodd" />
+                </svg>
+              </button>
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   viewBox="0 0 24 24"
                   fill="white"
-                  className="w-8 h-8"
+                  className="w-6 h-6"
                 >
                   <path d="M4.913 2.658c2.075-.27 4.19-.408 6.337-.408 2.147 0 4.262.139 6.337.408 1.922.25 3.291 1.861 3.405 3.727a4.403 4.403 0 0 0-1.032-.211 50.89 50.89 0 0 0-8.42 0c-2.358.196-4.04 2.19-4.04 4.434v4.286a4.47 4.47 0 0 0 2.433 3.984L7.28 21.53A.75.75 0 0 1 6 21v-4.03a48.527 48.527 0 0 1-1.087-.128C2.905 16.58 1.5 14.833 1.5 12.862V6.638c0-1.97 1.405-3.718 3.413-3.979Z" />
                   <path d="M15.75 7.5c-1.376 0-2.739.057-4.086.169C10.124 7.797 9 9.103 9 10.609v4.285c0 1.507 1.128 2.814 2.67 2.94 1.243.102 2.5.157 3.768.165l2.782 2.781a.75.75 0 0 0 1.28-.53v-2.39l.33-.026c1.542-.125 2.67-1.433 2.67-2.94v-4.286c0-1.505-1.125-2.811-2.664-2.94A49.392 49.392 0 0 0 15.75 7.5Z" />
                 </svg>
               </div>
-              <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-2">
-                Welcome to AI Chat
-              </h2>
-              <p className="text-gray-500 dark:text-gray-400 max-w-md mb-8">
-                Start a conversation with the AI. Ask questions, share images, or upload text files!
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
-                {[
-                  "Explain quantum computing",
-                  "Help me write a poem",
-                  "What can you help me with?",
-                  "Tell me a joke",
-                ].map((suggestion) => (
-                  <button
-                    key={suggestion}
-                    onClick={() => handleSendMessage(suggestion, [])}
-                    className="px-4 py-3 text-sm text-left text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl border border-gray-200 dark:border-gray-700 transition-colors"
-                  >
-                    {suggestion}
-                  </button>
-                ))}
+              <div>
+                <h1 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  {activeSession?.title || "AI Chat"}
+                </h1>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Powered by GPT-4o
+                </p>
               </div>
             </div>
-          ) : (
-            <>
-              {messages.map((message) => (
-                <ChatMessage key={message.id} message={message} />
-              ))}
-              {streamingContent && (
-                <ChatMessage
-                  message={{
-                    id: "streaming",
-                    role: "assistant",
-                    content: streamingContent,
-                    timestamp: new Date(),
-                  }}
-                />
-              )}
-              {isLoading && !streamingContent && (
-                <div className="flex justify-start mb-4">
-                  <div className="flex items-start gap-3">
-                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-sm font-medium text-white">
-                      AI
-                    </div>
-                    <div className="bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-bl-md px-4 py-3">
-                      <div className="flex items-center gap-1">
-                        <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                        <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                        <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></span>
+            <button
+              onClick={handleNewChat}
+              className="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+            >
+              New Chat
+            </button>
+          </div>
+        </header>
+
+        {/* Messages Area */}
+        <main className="flex-1 overflow-y-auto">
+          <div className="max-w-4xl mx-auto px-4 py-6">
+            {messages.length === 0 && !streamingContent ? (
+              <div className="flex flex-col items-center justify-center h-full min-h-[60vh] text-center">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center mb-6">
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="white"
+                    className="w-8 h-8"
+                  >
+                    <path d="M4.913 2.658c2.075-.27 4.19-.408 6.337-.408 2.147 0 4.262.139 6.337.408 1.922.25 3.291 1.861 3.405 3.727a4.403 4.403 0 0 0-1.032-.211 50.89 50.89 0 0 0-8.42 0c-2.358.196-4.04 2.19-4.04 4.434v4.286a4.47 4.47 0 0 0 2.433 3.984L7.28 21.53A.75.75 0 0 1 6 21v-4.03a48.527 48.527 0 0 1-1.087-.128C2.905 16.58 1.5 14.833 1.5 12.862V6.638c0-1.97 1.405-3.718 3.413-3.979Z" />
+                    <path d="M15.75 7.5c-1.376 0-2.739.057-4.086.169C10.124 7.797 9 9.103 9 10.609v4.285c0 1.507 1.128 2.814 2.67 2.94 1.243.102 2.5.157 3.768.165l2.782 2.781a.75.75 0 0 0 1.28-.53v-2.39l.33-.026c1.542-.125 2.67-1.433 2.67-2.94v-4.286c0-1.505-1.125-2.811-2.664-2.94A49.392 49.392 0 0 0 15.75 7.5Z" />
+                  </svg>
+                </div>
+                <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-2">
+                  Welcome to AI Chat
+                </h2>
+                <p className="text-gray-500 dark:text-gray-400 max-w-md mb-8">
+                  Start a conversation with the AI. Ask questions, share images, or upload text files!
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-lg">
+                  {[
+                    "Explain quantum computing",
+                    "Help me write a poem",
+                    "What can you help me with?",
+                    "Tell me a joke",
+                  ].map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      onClick={() => handleSendMessage(suggestion, [])}
+                      className="px-4 py-3 text-sm text-left text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl border border-gray-200 dark:border-gray-700 transition-colors"
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <>
+                {messages.map((message) => (
+                  <ChatMessage key={message.id} message={message} />
+                ))}
+                {streamingContent && (
+                  <ChatMessage
+                    message={{
+                      id: "streaming",
+                      role: "assistant",
+                      content: streamingContent,
+                      timestamp: new Date(),
+                    }}
+                  />
+                )}
+                {isLoading && !streamingContent && (
+                  <div className="flex justify-start mb-4">
+                    <div className="flex items-start gap-3">
+                      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-sm font-medium text-white">
+                        AI
+                      </div>
+                      <div className="bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-bl-md px-4 py-3">
+                        <div className="flex items-center gap-1">
+                          <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                          <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                          <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></span>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              )}
-              <div ref={messagesEndRef} />
-            </>
-          )}
-        </div>
-      </main>
+                )}
+                <div ref={messagesEndRef} />
+              </>
+            )}
+          </div>
+        </main>
 
-      {/* Input Area */}
-      <ChatInput
-        onSend={handleSendMessage}
-        disabled={isLoading}
-        placeholder="Message AI..."
-      />
+        {/* Input Area */}
+        <ChatInput
+          onSend={handleSendMessage}
+          disabled={isLoading}
+          placeholder="Message AI..."
+        />
+      </div>
     </div>
   );
 }

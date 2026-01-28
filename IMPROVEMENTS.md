@@ -9,7 +9,7 @@ A roadmap of features and improvements for the AI Chat application.
 - [ ] **Model selection** - Let users choose between GPT-4o, GPT-4o-mini, etc.
 - [ ] **Regenerate response** - Button to regenerate the last AI response
 - [ ] **Edit messages** - Allow users to edit their previous messages and regenerate from that point
-- [ ] **Copy message** - Button to copy AI responses to clipboard
+- [ ] **Copy message** - Button to copy AI responses to clipboard ✅
 - [ ] **Stop generation** - Button to stop streaming mid-response (abort controller is already in place)
 
 ## UI/UX Enhancements
